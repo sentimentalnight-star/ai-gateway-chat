@@ -1,0 +1,7 @@
+gcp:
+  project-id: "ai-gateway-chat"
+  location: "global" # チャット用は global の従量課金を利用
+  
+  spring:
+    application:
+      name: ai-gateway-chat

@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Gateway Chat</title>
+
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 0 10px;
+        }
+
+        #chat-log {
+            border: 1px solid #ccc;
+            height: 400px;
+            max-height: 400px;
+            overflow-y: scroll;
+            padding: 10px;
+            margin-bottom: 10px;
+            background-color: #fafafa;
+        }
+
+        .user {
+            color: blue;
+            margin: 8px 0;
+            white-space: pre-wrap;
+        }
+
+        .ai {
+            color: green;
+            margin: 8px 0;
+            white-space: pre-wrap;
+        }
+
+        .model-selector {
+            margin-bottom: 10px;
+        }
+
+        .file-selector {
+            margin-bottom: 10px;
+        }
+
+        .file-info {
+            margin-top: 5px;
+            font-size: 0.9em;
+            color: #555;
+        }
+
+        .input-area {
+            display: flex;
+            gap: 10px;
+        }
+
+        #prompt {
+            flex-grow: 1;
+            resize: vertical;
+        }
+
+        #send-button {
+            padding: 0 20px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h2>AI Gateway Chat</h2>
+
+    <!-- モデル選択 -->
+    <div class="model-selector">
+        <label for="model-select">Model: </label>
+
+        <select id="model-select">
+            <option value="gemini-2.5-pro">
+                gemini-2.5-pro (移行期用)
+            </option>
+
+            <option value="gemini-2.5-flash" selected>
+                Gemini 2.5 Flash (移行期用)
+            </option>
+
+            <option value="gemini-2.5-flash-lite">
+                gemini-2.5-flash-lite (移行期用)
+            </option>
+
+            <option value="gemini-3.1-flash-lite">
+                gemini-3.1-flash-lite
+            </option>
+
+            <option value="gemini-3.5-flash">
+                gemini-3.5-flash
+            </option>
+
+            <option value="gemini-3.5-flash-lite">
+                gemini-3.5-flash-lite
+            </option>
+        </select>
+    </div>
+
+    <!-- ファイル選択 -->
+    <div class="file-selector">
+
+        <label for="file-input">
+            添付ファイル：
+        </label>
+
+        <input
+            type="file"
+            id="file-input"
+            accept="image/*,application/pdf,text/plain"
+        >
+
+        <div id="file-info" class="file-info"></div>
+
+    </div>
+
+    <!-- ログ表示エリア -->
+    <div id="chat-log"></div>
+
+    <!-- 入力エリア -->
+    <div class="input-area">
+
+        <textarea
+            id="prompt"
+            rows="3"
+            placeholder="メッセージを入力してください"
+        ></textarea>
+
+        <button
+            id="send-button"
+            onclick="sendMessage()"
+        >
+            送信
+        </button>
+
+    </div>
+
+
+    <script>
+
+        // ==============================
+        // 設定
+        // ==============================
+        const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+        const ALLOWED_MIME_TYPES = new Set([
+            "application/pdf",
+            "text/plain",
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "image/gif"
+        ]);
+
+        // ==============================
+        // 状態
+        // ==============================
+        let chatHistory = [];
+        let isSending = false;
+
+        // ==============================
+        // DOM
+        // ==============================
+        const fileInput =
+            document.getElementById("file-input");
+        const fileInfo =
+            document.getElementById("file-info");
+        const promptInput =
+            document.getElementById("prompt");
+        const sendButton =
+            document.getElementById("send-button");
+        const chatLog =
+            document.getElementById("chat-log");
+
+        // ==============================
+        // ファイル選択時
+        // ==============================
+        fileInput.addEventListener("change", () => {
+            fileInfo.textContent = "";
+            if (fileInput.files.length === 0) {
+                return;
+            }
+            const file = fileInput.files[0];
+
+            // サイズチェック
+            if (file.size > MAX_FILE_SIZE) {
+                fileInfo.textContent =
+                    "ファイルサイズは10MBまでです。";
+                fileInput.value = "";
+                return;
+            }
+
+            // MIME typeチェック
+            if (!ALLOWED_MIME_TYPES.has(file.type)) {
+                fileInfo.textContent =
+                    "対応していないファイル形式です。";
+                fileInput.value = "";
+                return;
+            }
+
+            fileInfo.textContent =
+                `選択中: ${file.name} (${formatFileSize(file.size)})`;
+        });
+
+
+        // ==============================
+        // メッセージ送信
+        // ==============================
+        async function sendMessage() {
+
+            // 二重送信防止
+            if (isSending) {
+                return;
+            }
+
+            const prompt =
+                promptInput.value.trim();
+            if (!prompt) {
+                return;
+            }
+
+            const selectedModel =
+                document.getElementById("model-select").value;
+
+            // ==============================
+            // ファイル情報
+            // ==============================
+            let fileData = null;
+            let mimeType = null;
+            let fileName = null;
+
+            if (fileInput.files.length > 0) {
+                const file =
+                    fileInput.files[0];
+
+                // サイズチェック
+                if (file.size > MAX_FILE_SIZE) {
+                    alert(
+                        "ファイルサイズは10MBまでです。"
+                    );
+                    return;
+                }
+
+                // MIME typeチェック
+                if (!ALLOWED_MIME_TYPES.has(file.type)) {
+                    alert(
+                        "対応していないファイル形式です。"
+                    );
+                    return;
+                }
+
+                fileData =
+                    await toBase64(file);
+
+                mimeType =
+                    file.type;
+
+                fileName =
+                    file.name;
+            }
+
+            // ==============================
+            // UIを送信中にする
+            // ==============================
+            isSending = true;
+
+            sendButton.disabled = true;
+            sendButton.textContent = "送信中...";
+
+            // ==============================
+            // ユーザーメッセージ表示
+            // ==============================
+            const userMessageDiv =
+                document.createElement("div");
+            userMessageDiv.className = "user";
+
+            let userHtml =
+                "<b>You:</b> "
+                + escapeHtml(prompt)
+                    .replace(/\n/g, "<br>");
+
+            // 添付ファイルがあれば表示
+            if (fileName) {
+
+                userHtml +=
+                    "<br>📎 "
+                    + escapeHtml(fileName);
+            }
+
+            userMessageDiv.innerHTML =
+                userHtml;
+
+            chatLog.appendChild(
+                userMessageDiv
+            );
+
+            // 入力欄をクリア
+            promptInput.value = "";
+
+            // ==============================
+            // AI回答エリア
+            // ==============================
+            const aiMessageDiv =
+                document.createElement("div");
+            aiMessageDiv.className = "ai";
+            aiMessageDiv.innerHTML =
+                "<b>AI:</b> ";
+            chatLog.appendChild(
+                aiMessageDiv
+            );
+
+            let aiResponseText = "";
+
+            try {
+                // ==============================
+                // API呼び出し
+                // ==============================
+                const response =
+                    await fetch(
+                        "/api/chat/stream",
+                        {
+                            method: "POST",
+
+                            headers: {
+                                "Content-Type":
+                                    "application/json"
+                            },
+
+                            body: JSON.stringify({
+                                modelId:
+                                    selectedModel,
+                                history:
+                                    chatHistory,
+                                prompt:
+                                    prompt,
+                                fileData:
+                                    fileData,
+                                mimeType:
+                                    mimeType
+                            })
+                        }
+                    );
+
+                // ==============================
+                // HTTPエラー
+                // ==============================
+                if (!response.ok) {
+                    let errorMessage =
+                        `HTTP ${response.status}`;
+                    try {
+                        const errorText =
+                            await response.text();
+                        if (errorText) {
+                            errorMessage +=
+                                `: ${errorText}`;
+                        }
+                    } catch (_) {
+                        // エラー本文取得失敗は無視
+                    }
+
+                    throw new Error(
+                        errorMessage
+                    );
+                }
+
+                // ==============================
+                // Streaming確認
+                // ==============================
+                if (!response.body) {
+                    throw new Error(
+                        "レスポンスストリームを取得できませんでした。"
+                    );
+                }
+
+                const reader =
+                    response.body.getReader();
+                const decoder =
+                    new TextDecoder("utf-8");
+
+                // ==============================
+                // ストリーミング受信
+                // ==============================
+                while (true) {
+                    const {
+                        done,
+                        value
+                    } = await reader.read();
+
+                    if (done) {
+                        break;
+                    }
+
+                    const chunk =
+                        decoder.decode(
+                            value,
+                            {
+                                stream: true
+                            }
+                        );
+
+                    aiResponseText +=
+                        chunk;
+
+                    const formattedHtml =
+                        formatMarkdown(
+                            aiResponseText
+                        );
+
+                    aiMessageDiv.innerHTML =
+                        "<b>AI:</b> "
+                        + formattedHtml;
+
+                    // 自動スクロール
+                    chatLog.scrollTop =
+                        chatLog.scrollHeight;
+                }
+
+                // TextDecoderの残りを処理
+                aiResponseText +=
+                    decoder.decode();
+
+                // ==============================
+                // 会話履歴に追加
+                // ==============================
+                chatHistory.push({
+                    role: "user",
+                    content: prompt
+                });
+
+                chatHistory.push({
+                    role: "model",
+                    content: aiResponseText
+                });
+
+                // ==============================
+                // ファイルをクリア
+                // ==============================
+                fileInput.value = "";
+                fileInfo.textContent = "";
+
+            } catch (err) {
+                console.error(
+                    "Chat error:",
+                    err
+                );
+
+                aiMessageDiv.innerHTML =
+                    "<b>AI:</b> "
+                    + escapeHtml(
+                        `[エラーが発生しました: ${err.message}]`
+                    );
+
+            } finally {
+                // ==============================
+                // 送信状態解除
+                // ==============================
+
+                isSending = false;
+
+                sendButton.disabled = false;
+                sendButton.textContent = "送信";
+
+                promptInput.focus();
+            }
+        }
+
+        // ==============================
+        // File → Base64
+        // ==============================
+        async function toBase64(file) {
+
+            return new Promise(
+                (resolve, reject) => {
+
+                    const reader =
+                        new FileReader();
+
+                    reader.onload = () => {
+
+                        const result =
+                            reader.result;
+
+                        // data:application/pdf;base64,...
+                        // の「,」以降だけ取得
+                        const commaIndex =
+                            result.indexOf(",");
+
+                        if (commaIndex === -1) {
+                            reject(
+                                new Error(
+                                    "ファイルのBase64変換に失敗しました。"
+                                )
+                            );
+                            return;
+                        }
+
+                        const base64 =
+                            result.substring(
+                                commaIndex + 1
+                            );
+
+                        resolve(base64);
+                    };
+
+                    reader.onerror = () => {
+                        reject(
+                            new Error(
+                                "ファイルの読み込みに失敗しました。"
+                            )
+                        );
+                    };
+
+                    reader.readAsDataURL(file);
+                }
+            );
+        }
+
+        // ==============================
+        // Markdown簡易表示
+        // ==============================
+        function formatMarkdown(text) {
+
+            let safeText =
+                escapeHtml(text);
+
+            // **太字**
+            safeText =
+                safeText.replace(
+                    /\*\*(.*?)\*\*/g,
+                    "<b>$1</b>"
+                );
+
+            // 改行
+            safeText =
+                safeText.replace(
+                    /\n/g,
+                    "<br>"
+                );
+
+            return safeText;
+        }
+
+        // ==============================
+        // HTMLエスケープ
+        // ==============================
+        function escapeHtml(str) {
+            return str
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        // ==============================
+        // ファイルサイズ表示
+        // ==============================
+        function formatFileSize(bytes) {
+
+            if (bytes < 1024) {
+                return `${bytes} B`;
+            }
+
+            if (bytes < 1024 * 1024) {
+                return `${(bytes / 1024).toFixed(1)} KB`;
+            }
+
+            return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        }
+
+        // ==============================
+        // Ctrl + Enter で送信
+        // ==============================
+        promptInput.addEventListener(
+            "keydown",
+            (event) => {
+
+                if (
+                    event.ctrlKey &&
+                    event.key === "Enter"
+                ) {
+                    event.preventDefault();
+                    sendMessage();
+                }
+            }
+        );
+
+    </script>
+
+</body>
+</html>
