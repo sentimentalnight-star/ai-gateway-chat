@@ -32,6 +32,43 @@
             color: green;
             margin: 8px 0;
             white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .ai a {
+            color: #1769aa;
+            text-decoration: underline;
+            overflow-wrap: anywhere;
+        }
+
+        .grounding-sources {
+            margin-top: 12px;
+            padding: 10px 12px;
+            border-left: 3px solid #8aa9c4;
+            border-radius: 4px;
+            background: #f0f5f9;
+            color: #333;
+            white-space: normal;
+        }
+
+        .grounding-sources-title {
+            margin-bottom: 6px;
+            font-weight: 600;
+            font-size: 0.92em;
+        }
+
+        .grounding-sources ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        .grounding-sources li {
+            margin: 4px 0;
+            overflow-wrap: anywhere;
+        }
+
+        .grounding-sources a {
+            color: #1769aa;
         }
 
         .model-selector {
@@ -402,14 +439,9 @@
                     aiResponseText +=
                         chunk;
 
-                    const formattedHtml =
-                        formatMarkdown(
-                            aiResponseText
-                        );
-
                     aiMessageDiv.innerHTML =
                         "<b>AI:</b> "
-                        + formattedHtml;
+                        + formatAiResponse(aiResponseText);
 
                     // 自動スクロール
                     chatLog.scrollTop =
@@ -419,6 +451,11 @@
                 // TextDecoderの残りを処理
                 aiResponseText +=
                     decoder.decode();
+
+                // 最終チャンクも含めて描画を更新
+                aiMessageDiv.innerHTML =
+                    "<b>AI:</b> "
+                    + formatAiResponse(aiResponseText);
 
                 // ==============================
                 // 会話履歴に追加
@@ -517,28 +554,109 @@
         }
 
         // ==============================
-        // Markdown簡易表示
+        // AI回答の表示
+        // - Markdownリンクをクリック可能にする
+        // - バックエンドが付加する検索ソース一覧を独立表示する
         // ==============================
-        function formatMarkdown(text) {
+        const GROUNDING_SOURCE_MARKER = "**参照したWebソース**";
 
-            let safeText =
-                escapeHtml(text);
+        function formatAiResponse(rawText) {
+            const markerIndex = rawText.indexOf(GROUNDING_SOURCE_MARKER);
+
+            // 検索ソース一覧がなければ、通常の回答として表示
+            if (markerIndex === -1) {
+                return formatMarkdown(rawText);
+            }
+
+            const answerText = rawText
+                .slice(0, markerIndex)
+                .trimEnd();
+            const sourceText = rawText.slice(
+                markerIndex + GROUNDING_SOURCE_MARKER.length
+            );
+
+            const answerHtml = formatMarkdown(answerText);
+            const sources = parseGroundingSources(sourceText);
+
+            // ストリーミング途中でリンクが未完成なら、表示可能な出典だけを表示
+            if (sources.length === 0) {
+                return answerHtml;
+            }
+
+            const sourceItems = sources.map(source => {
+                const title = escapeHtml(source.title);
+                const url = escapeHtml(source.url);
+                return `<li><a href="${url}" target="_blank" rel="noopener noreferrer">${title}</a></li>`;
+            }).join("");
+
+            return answerHtml
+                + `<section class="grounding-sources" aria-label="検索で参照したWebソース">`
+                + `<div class="grounding-sources-title">🔎 参照したWebソース</div>`
+                + `<ul>${sourceItems}</ul>`
+                + `</section>`;
+        }
+
+        function parseGroundingSources(sourceText) {
+            const result = [];
+            const seen = new Set();
+
+            for (const line of sourceText.split(/\r?\n/)) {
+                // Backend format: - [title](<https://example.com/...>)
+                const match = line.match(/^\s*-\s+\[(.*)\]\(\s*<(https?:\/\/[^>]+)>\s*\)\s*$/);
+                if (!match) {
+                    continue;
+                }
+
+                const title = match[1]
+                    .replace(/\\([\[\]\\])/g, "$1")
+                    .trim();
+                const url = match[2].trim();
+
+                // http/https のみ許可し、不正なURLは表示しない
+                try {
+                    const parsedUrl = new URL(url);
+                    if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
+                        continue;
+                    }
+                } catch (_) {
+                    continue;
+                }
+
+                if (!title || seen.has(url)) {
+                    continue;
+                }
+
+                seen.add(url);
+                result.push({ title, url });
+            }
+
+            return result;
+        }
+
+        // Markdown簡易表示（太字・改行・HTTP(S)リンク）
+        function formatMarkdown(text) {
+            // Backend のリンク形式 [title](<https://...>) を標準形に正規化
+            const normalizedText = text.replace(
+                /\]\(\s*<(https?:\/\/[^>\s]+)>\s*\)/g,
+                "]($1)"
+            );
+
+            let safeText = escapeHtml(normalizedText);
 
             // **太字**
-            safeText =
-                safeText.replace(
-                    /\*\*(.*?)\*\*/g,
-                    "<b>$1</b>"
-                );
+            safeText = safeText.replace(
+                /\*\*(.+?)\*\*/gs,
+                "<b>$1</b>"
+            );
+
+            // Markdownリンク。HTMLエスケープ後の文字列からHTTP(S)だけをリンク化
+            safeText = safeText.replace(
+                /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+                '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+            );
 
             // 改行
-            safeText =
-                safeText.replace(
-                    /\n/g,
-                    "<br>"
-                );
-
-            return safeText;
+            return safeText.replace(/\n/g, "<br>");
         }
 
         // ==============================
